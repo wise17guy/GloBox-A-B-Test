@@ -1,0 +1,148 @@
+Item 1
+/*SQL query that returns: the user ID, the user’s country, the user’s gender, the user’s device 
+type, the user’s test group, whether or not they converted (spent > $0), and how much they spent 
+in total ($0+).*/
+
+
+SELECT --Generating a dataset for the GloBox A/B Test Analysis:
+    u.id AS user_id,
+    COALESCE(u.country, 'Unknown') AS country, --Returning 'Unknown' for a missing country value
+    COALESCE(u.gender, 'Unknown') AS gender,  --Returning 'Unknown' for a missing gender value
+    COALESCE(g.device, 'Unknown') AS device_type,  --Returning 'Unknown' for a missing device value
+    g.group AS test_group,
+    
+    CASE WHEN a.spent > 0 THEN 'Yes'
+              ELSE 'No'
+         END AS converted,
+    COALESCE(SUM(a.spent), 0) AS total_spent  --Returning 0 when no expense value
+
+FROM users u  --Joining the 'users' table with 'groups' and 'activity' tables using the LEFT JOIN
+LEFT JOIN groups g
+ON u.id = g.uid
+LEFT JOIN activity a
+ON u.id = a.uid
+
+GROUP BY user_id, country, gender, device_type, test_group, converted; --Grouping the results by relevant columns
+
+
+-----------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------
+2
+--Question: Can a user show up more than once in the activity table? Yes or no, and why?
+
+SELECT a.uid, COUNT(*) AS count_row  --Selecting uid and counting the number of rows for each user ID (uid) in activity table  
+FROM activity a  --From activity table 
+GROUP BY a.uid --Group results by uid to count the number of rows for each user
+HAVING COUNT(*) > 1; -- Filter to show only uid that have more than one row
+
+/*Answer: A user can show up more than once in the activity table as the query returns
+several users transactions associated with the same uid*/
+--------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------
+3
+--Question: What are the start and end dates of the experiment?
+
+SELECT MIN(join_dt), MAX(join_dt) --Retrieving start and end dates from groups table.
+
+FROM groups;
+
+--Answer: 2023-01-25 to 2023-02-06
+----------------------------------
+----------------------------------
+4
+--Question: How many total users were in the experiment?
+
+SELECT COUNT(g.uid) --Count all users (uid) entries in the groups table
+FROM groups g;
+
+--Answer: 48,943
+----------------
+----------------
+5
+--Question: How many users were in the control and treatment groups?
+
+SELECT "group", COUNT(uid) AS group_count --Counting users (uid) for each group in the groups table.
+
+FROM groups
+GROUP BY "group";
+
+--Answer: Control A: 24,343, Treatment B: 24,600
+------------------------------------------------
+------------------------------------------------
+6
+--Question: What was the conversion rate of all users?
+ 
+SELECT -- Calculating the conversion rate of all users as a percentage.
+      ROUND(CAST(COUNT(DISTINCT a.uid) AS DECIMAL(10,2))/CAST(COUNT(DISTINCT u.id) 
+            AS DECIMAL(10,2)) * 100, 2) AS conversion_rate
+FROM users u
+LEFT JOIN activity a ON u.id = a.uid;
+
+--Answer: 4.28%
+---------------
+---------------
+7
+--Question:   What is the user conversion rate for the control and treatment groups?
+ 
+SELECT    --Selecting the group and calculating the conversion rate.
+  g.group,
+  ROUND(CAST(COUNT(DISTINCT a.uid) AS DECIMAL(10, 2)) / CAST(COUNT(DISTINCT u.id)
+  AS DECIMAL(10, 2)) * 100,2) AS conversion_rate
+FROM users u
+  LEFT JOIN groups g ON u.id = g.uid
+  LEFT JOIN activity a ON u.id = a.uid
+  
+GROUP BY g.group;   --Grouping the results by the group.
+
+--Answer:   Control A: 3.92%, Treatment B: 4.63%
+------------------------------------------------
+------------------------------------------------
+8
+-- Question: What is the average amount spent per user for the control and treatment groups, including users who did not convert?
+
+SELECT uad.group,   --Outer query calculating average amount spent per user for the control and treatment groups
+       CAST(SUM(uad.amt_spent)/COUNT(DISTINCT uad.user_id) AS DECIMAL(100,3))
+FROM (
+      SELECT    ---Subquery combining data from users, groups, and activity tables.
+           u.id AS user_id, u.country, u.gender, g.device, g.group, 
+           g.join_dt AS join_date, a.dt AS purchase_date, COALESCE(a.spent, 0) AS amt_spent
+      FROM users u
+      LEFT JOIN groups g ON u.id = g.uid
+      LEFT JOIN activity a ON u.id = a.uid
+      ) AS uad   --where uad is short for 'user activity data'
+GROUP BY uad.group;
+
+-- Answer: Control A: $3.375, Treatment B: $3.391
+-------------------------------------------------
+-------------------------------------------------
+9
+SELECT   --Analyzing a potential novelty effect by examining user engagement.
+    g.join_dt AS join_date, g.group, 
+    COUNT(DISTINCT g.uid) AS total_users,  --Counting the total number of distinct users in each group.
+    COUNT(DISTINCT a.uid) AS paying_users,  --Counting the total number of distinct users who paid.
+    SUM(a.spent) AS total_spent  --Total amount spent by users in all paying activities.
+FROM groups g
+LEFT JOIN activity a ON g.uid = a.uid  --Left join groups and activity tables.
+GROUP BY g.group, g.join_dt  -- Grouping the results by group and join date.
+ORDER BY join_date;
+----------------------------------------------------------------------------
+----------------------------------------------------------------------------
+10
+-- This query analyzes the date difference between user registration and conversion for converted users.
+SELECT n.group, COUNT(n.user_id), n.date_difference
+FROM (
+    
+      SELECT 
+        a.uid AS user_id,  --Selecting user ID from activity table.
+        g.group,  --Selecting user group from groups table.
+        g.join_dt AS date_registered,  --Selecting registration date from groups table as 'date_registered'.
+        a.dt AS date_converted,  --Selecting conversion date from activity table as 'date_converted'.
+        SUM(COALESCE(a.spent, 0)) AS total_spent,  --Summing the spent amount, handling NULLS with COALESCE.
+        a.dt - g.join_dt AS date_difference  --Calculating the date difference between conversion and registration.
+    FROM groups g
+    JOIN activity a ON g.uid = a.uid  --Joining groups and activity tables.
+    GROUP BY 1, 2, 3, 4  --Grouping by user ID, user group, registration date, and conversion date.
+) AS n  --Subquery (Aliased as n):
+GROUP BY 1, 3  --Grouping the results by user group and date difference.
+------------------------------------------------------------------------
+------------------------------------------------------------------------
